@@ -85,8 +85,5 @@ for images, row in zip([images, output], axes):
         ax.get_yaxis().set_visible(False)
 
 plt.show()
-# fig.savefig('images/original_decoded.png', bbox_inches='tight')
 plt.close()
 
-# if __name__ == "__main__":
-#     main()
