@@ -1,31 +1,44 @@
 import glob
 import os
 from skimage import io, transform
+import numpy as np
 from PIL import Image
 from torchvision.transforms import ToTensor
-
+from torch.utils.data import Dataset
+import random
 
 class CAEDataset(Dataset):
 
-    def __init__(self, root_dir, transform=None):
-            self.root_dir = root_dir
+    def __init__(self, region_dir='../a_mdt_data/HR_model_data/qtrland_training_regions', quilt_dir='./quilting/DCGAN_32deg', transform=None):
+            self.region_dir = region_dir
+            self.quilt_dir = quilt_dir
             self.transform = transform
-            self.input_paths = glob.glob(os.path.join(root_dir, 'inputs/*.png'))
-            self.target_paths = glob.glob(os.path.join(root_dir, 'targets/*.png'))
-            print(root_dir)
+            self.paths = glob.glob(os.path.join(region_dir, '*.npy'))
+            self.quilt_paths = glob.glob(os.path.join(quilt_dir, '*.png'))
+            print(region_dir)
 
     def __len__(self):
-        return len(self.input_paths)
+        return len(self.paths)
 
     def __getitem__(self, idx):
-        input_name = self.input_paths[idx]
-        target_name = self.input_paths[idx]
+        input_name = self.paths[idx]
+        random_quilt = random.choice(self.quilt_paths)
+        
+        # Load and apply random quilt
+        target_img = np.load(input_name)
+        quilt = Image.open(random_quilt)
+        quilt = quilt.convert(mode='L')
+        quilt = np.array(quilt).astype(np.float32)
+        mask = target_img != 0
+        quilt = (quilt - np.nanmin(quilt)) / (np.nanmax(quilt) - np.nanmin(quilt))
+        img = target_img + .3* quilt * mask
 
-        input_img = Image.open(input_name)
-        target_img = Image.open(target_name)
+        # consider turning back to PIL images for transforms e.g. rotations, flips
+        # img = Image.fromarray(img)
+        # target_img = Image.fromarray(target_img)
 
         if self.transform is not None:
-            input_img = self.transform(input_img)
+            img = self.transform(img)
             target_img = self.transform(target_img)
 
-        return ToTensor()(input_img), ToTensor()(target_img)
+        return ToTensor()(img), ToTensor()(target_img)
