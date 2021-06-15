@@ -9,10 +9,11 @@ import random
 
 class CAEDataset(Dataset):
 
-    def __init__(self, region_dir='../a_mdt_data/HR_model_data/qtrland_training_regions', quilt_dir='./quilting/DCGAN_32deg', transform=None):
+    def __init__(self, region_dir, quilt_dir, mdt, transform=None):
             self.region_dir = region_dir
             self.quilt_dir = quilt_dir
             self.transform = transform
+            self.mdt = mdt
             self.paths = glob.glob(os.path.join(region_dir, '*.npy'))
             self.quilt_paths = glob.glob(os.path.join(quilt_dir, '*.png'))
             print(region_dir)
@@ -31,6 +32,8 @@ class CAEDataset(Dataset):
         quilt = np.array(quilt).astype(np.float32)
         mask = target_img != 0
         quilt = (quilt - np.nanmin(quilt)) / (np.nanmax(quilt) - np.nanmin(quilt))
+        if self.mdt:
+            quilt = (quilt*2) - 1 
         img = target_img + .3* quilt * mask
 
         # consider turning back to PIL images for transforms e.g. rotations, flips

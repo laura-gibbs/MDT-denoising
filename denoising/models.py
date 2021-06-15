@@ -27,9 +27,9 @@ class ConvAutoencoder(nn.Module):
         )
 
         self.fully_connected = nn.Sequential(
-            nn.Conv2d(in_channels=8, out_channels=1, kernel_size=1),# stride=2),
-            nn.BatchNorm2d(num_features=1),
-            nn.Sigmoid()
+            nn.Conv2d(in_channels=8, out_channels=1, kernel_size=1)# stride=2),
+            # nn.BatchNorm2d(num_features=1),
+            # nn.Sigmoid()
         )
 
 

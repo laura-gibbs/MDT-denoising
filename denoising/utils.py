@@ -1,4 +1,14 @@
+from scipy.ndimage import gaussian_filter
+import numpy as np
 
+
+def define_dims(resolution):
+    r"""
+    Input arguments: resolution
+    """
+    II = 360 // resolution
+    JJ = 180 // resolution
+    return int(II), int(JJ)
 
 
 def extract_region(mdt, lon_range, lat_range, central_lon=0, central_lat=0):
@@ -8,3 +18,37 @@ def extract_region(mdt, lon_range, lat_range, central_lon=0, central_lat=0):
     py = ((lat_range[0] + 90) * res, (lat_range[1] + 90) * res)
 
     return mdt[py[0]:py[1], px[0]:px[1]]
+
+
+def apply_gaussian(arr, sigma=1.6, bd=-1.5):
+    V = arr.copy()
+    mask = np.ones_like(arr)
+    mask[np.isnan(arr)] = np.nan
+    V[np.isnan(arr)] = 0
+    VV = gaussian_filter(V, sigma=sigma)
+
+    W = 0*arr.copy() + 1
+    W[np.isnan(arr)] = 0
+    WW = gaussian_filter(W, sigma=sigma)
+
+    arr = VV/WW * mask
+    # arr[np.isnan(arr)] = bd
+
+    return arr
+
+
+def create_coords(resolution, central_lon=0, rads=False):
+    r"""
+    Defines gloibal lon and lat, with lat shifted to
+    midpoints and set between -90 and 90.
+    """
+    II, JJ = define_dims(resolution)
+    longitude = np.array([resolution * (i + 0.5) - central_lon for i in range(II)])
+    # quickfix
+    # longitude[longitude>180] = longitude[longitude>180] - 360
+    latitude = np.array([resolution * (j - 0.5) - 90.0 for j in range(JJ)])
+    if rads:
+        longitude = np.deg2rad(longitude)
+        latitude = np.deg2rad(latitude)
+
+    return longitude, latitude
