@@ -19,8 +19,8 @@ def imshow(img):
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 transform = transforms.ToTensor()
 
-mdt = False
-n_epochs = 300
+mdt = True
+n_epochs = 80
 if mdt:
     var = 'mdt'
 else:
@@ -76,6 +76,8 @@ for epoch in range(1, n_epochs+1):
             n_epochs,
             train_loss
             ))
+        if epoch%10==0:
+            torch.save(model.state_dict(), f'C:/Users/oa18724/OneDrive - University of Bristol/models/{epoch}e_{var}_model_cdae.pth')
 
 torch.save(model.state_dict(), f'models/{n_epochs}e_{var}_model_cdae.pth')
 
