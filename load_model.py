@@ -4,12 +4,39 @@ import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib as mpl
-from denoising.utils import apply_gaussian, create_coords
+from denoising.utils import apply_gaussian, create_coords, read_surface
 from denoising.data import CAEDataset
 import cartopy.crs as ccrs
 from cartopy.mpl.ticker import LongitudeFormatter, LatitudeFormatter
 from cartopy.feature import GSHHSFeature
+from scipy.ndimage import gaussian_filter
+from skimage.metrics import structural_similarity as ssim
+import cv2
 
+def apply_gaussian(arr, mdt=False, sigma=3):
+    V = arr.copy()
+    mask = land_false(arr).astype(np.float32)
+    mask[mask == 0] = np.nan
+    V[np.isnan(mask)] = 0
+    VV = gaussian_filter(V, sigma=sigma)
+
+    W = 0*arr.copy() + 1
+    W[np.isnan(mask)] = 0
+    WW = gaussian_filter(W, sigma=sigma)
+
+    arr = VV/WW * mask
+    vmin, _ = get_bounds(mdt)
+    arr[np.isnan(mask)] = vmin
+
+    return arr
+
+
+def main():
+    pass
+
+
+if __name__ == "__main__":
+    main()
 
 
 def mutual_information(hgram):
@@ -71,7 +98,7 @@ def plot_region(tensor, ax, lons, lats, extent, crs=ccrs.PlateCarree(), **plot_k
     if 'cmap' not in plot_kwargs:
         plot_kwargs['cmap']='turbo'
     x0, x1, y0, y1 = extent
-    ax.pcolormesh(lons, lats, tensor, transform=crs, **plot_kwargs)
+    im = ax.pcolormesh(lons, lats, tensor, transform=crs, **plot_kwargs)
     ax.set_extent((x0, x1, y0, y1), crs=crs)
     # longitude[longitude>180] = longitude[longitude>180] - 360
     ax.set_xticks(np.linspace(x1, x0, 5), crs=crs)
@@ -80,8 +107,9 @@ def plot_region(tensor, ax, lons, lats, extent, crs=ccrs.PlateCarree(), **plot_k
     lon_formatter = LongitudeFormatter()
     ax.xaxis.set_major_formatter(lon_formatter)
     ax.yaxis.set_major_formatter(lat_formatter)
-    ax.tick_params(axis='both', which='major', labelsize=6)
+    ax.tick_params(axis='both', which='major', labelsize=7)
     ax.add_feature(GSHHSFeature(scale='intermediate', facecolor='lightgrey', linewidth=0.2))
+    return im
 
 
 def get_spatial_params(x, y, w=128, h=128, resolution=0.25):
@@ -108,6 +136,129 @@ class MidpointNormalize(mpl.colors.Normalize):
         return np.ma.masked_array(np.interp(value, x, y), np.isnan(value))
 
 
+def get_plot_params(mdt=False, rmse=False):
+    if mdt:
+        if rmse:
+            vmin = 0
+            vmax = 0.35
+            cticks = 8
+        else:
+            vmin = -1.5
+            vmax = 1.5
+            cticks = 7
+    else:
+        vmin = 0
+        if rmse:
+            vmax = 0.2
+            cticks = 11
+        else:
+            vmax = 1.5
+            cticks = 7
+    return vmin, vmax, cticks
+
+
+def create_subplot(data, paths, mdt=False, rmse=False, batch_size=8, crs=ccrs.PlateCarree()):
+    vmin, vmax, cticks = get_plot_params(mdt, rmse)
+    fig, axes  = plt.subplots(len(data), batch_size, figsize=(25, 10), subplot_kw={'projection': crs})
+    for i, (axrow, tensor) in enumerate(zip(axes, data)):
+        for j, ax in enumerate(axrow):
+            split_path = paths[j][:len(paths[j])-4].split('_')
+            x, y = int(split_path[-2]), int(split_path[-1])
+            # w, h = tensor[j, 0].shape
+            lons, lats, extent = get_spatial_params(x, y)
+            im = plot_region(tensor[j, 0], ax, lons, lats, extent, vmin=vmin, vmax=vmax)
+    cbarheight = 0.75
+    bottom_pos = (1 - cbarheight)/2 - 0.005
+    cbarwidth = 0.01
+    left_pos = 0.92 # (should be half of cbarwidth to be center-aligned if orien=horiz)
+    cbar_ax = fig.add_axes([left_pos, bottom_pos, cbarwidth, cbarheight])
+    cbar_ax.tick_params(labelsize=9)
+    cbar = fig.colorbar(im, cax=cbar_ax, ticks=np.linspace(vmin, vmax, num=cticks))#, orientation='horizontal')
+    plt.show()
+    plt.close()
+
+
+
+
+def load_batch(dataset, batch_size, batch_intersect=0):
+    images = []
+    paths = []
+    targets = []
+    for i in range(batch_intersect, batch_intersect+batch_size):
+        image, target = dataset[i]
+        images.append(image)
+        targets.append(target)
+        paths.append(dataset.paths[i])
+    images = torch.stack(images)
+    if dataset.testing:
+        return images, paths
+    else:
+        targets = torch.stack(targets)
+        return images, targets, paths
+
+
+def detach(input):
+    return input.detach().cpu().numpy()
+
+
+def detach_tensors(tensors):
+    tensors = [detach(tensor) for tensor in tensors]
+    if len(tensors) == 1:
+        return tensors[0]
+    return tensors
+
+
+def land_false(arr):
+    # For multiplying
+    return arr != 0
+
+
+def land_true(arr): #land_mask
+    # For indexing
+    return arr == 0
+
+
+def get_bounds(mdt=False):
+    if mdt:
+        vmin = -1.5
+        vmax = 1.5
+    else:
+        vmin = 0
+        vmax = 1.5
+    return vmin, vmax
+
+
+def get_cbar(fig, im, cbar_pos, mdt=False, rmse=False, orientation='vertical', labelsize=9):
+    r"""
+    Args:
+        cbar_pos (list): left_pos, bottom_pos, cbarwidth, cbarheight
+    """
+    vmin, vmax, cticks = get_plot_params(mdt, rmse)
+    cbar_ax = fig.add_axes(cbar_pos)
+    cbar_ax.tick_params(labelsize=labelsize)
+    cbar = fig.colorbar(im, cax=cbar_ax, ticks=np.linspace(vmin, vmax, num=cticks), orientation=orientation)
+    return cbar
+
+
+def rmsd_window(arr, reference, hw_size):
+    r"""
+    Args:
+        hw_size (integer): half width size of window
+    """
+    squared_diff = (arr - reference)**2
+    # Get first dimension? and divide 360 by it to get degree resolution
+    res = arr.shape[0]/360
+    hw_pixels = hw_size * res
+    # Add reflected padding of size hw_pixels
+    padded_arr = 
+    # Convolve window of sixe hw_pixels across image and average
+    for i in range(hw_pixels, padded_arr.shape - hw_pixels):
+        for j in range(hw_pixels):
+            moving_avg = padded_arr[i, j]
+
+
+
+
 mdt = False
 n_epochs = 200
 
@@ -117,51 +268,170 @@ else:
     var = 'cs'
 
 model = ConvAutoencoder()
-# model.load_state_dict(torch.load('./models/200e_mdt_model_autoencoder_unnorm.pth'))
 model.load_state_dict(torch.load(f'./models/{n_epochs}e_{var}_model_cdae.pth'))
 model.eval()
 
 dataset = CAEDataset(region_dir=f'../a_mdt_data/HR_model_data/{var}_testing_regions', quilt_dir=f'./quilting/DCGAN_{var}', mdt=mdt)
+g_dataset = CAEDataset(region_dir=f'../a_mdt_data/geodetic_cdae/{var}', quilt_dir=None, mdt=mdt)
+nemo = CAEDataset(region_dir=f'../a_mdt_data/HR_model_data/orca_{var}_regions', quilt_dir=None, mdt=mdt)
+cls18 = CAEDataset(region_dir=f'../a_mdt_data/HR_model_data/cls18_{var}_regions', quilt_dir=None, mdt=mdt)
 
 batch_size = 8
-images = []
-targets = []
-paths = []
-start = 29*13
-for i in range(batch_size):
-    image, target = dataset[i]
-    images.append(image)
-    targets.append(target)
-    paths.append(dataset.paths[i])
-images = torch.stack(images)
-targets = torch.stack(targets)
-print(images.size())
+batch_intersect = 0
 
+x_coords = [0, 128, 128, 256, 256, 384, 384]#, 512, 512, 768, 768, 768, 768, 896, 896, 896] # 640, 640, 640, 640
+y_coords = [488, 360, 488, 360, 488, 360, 488]#, 232, 488, 104, 232, 360, 488, 232, 360, 488] # 104, 232, 360, 488
+
+avg_rmses = []
+for x, y in zip(x_coords, y_coords):
+    g_images = g_dataset.get_regions(x, y)
+    g_images = torch.stack(g_images)
+    g_outputs = model(g_images)
+    target = cls18.get_regions(x,y)[0]
+    g_images, g_outputs, target = detach_tensors([g_images, g_outputs, target])
+    mask = land_false(g_images)[0]
+    target = target * mask
+    g_images = g_images * mask
+    g_outputs = g_outputs * mask
+    avg_rmse = np.sqrt(np.mean((g_outputs - target) ** 2))
+    avg_rmses.append(avg_rmse)
+
+    # Calculate Gaussian Filtered Geodetic MDTs and RMSE/SSIM between Gauss vs NEMO and Model vs NEMO
+    kms = np.arange(25, 501, 25)
+    sigmas = ((kms * 4) / 111) / 2.355
+    # sigmas = np.arange(0.5, 5.0, 0.25)
+    gauss_avg_rmses = []
+    for sigma in sigmas:
+        gauss_images = [apply_gaussian(image, mdt, sigma) for image in g_images]
+        gauss_images = np.array(gauss_images)
+        gauss_images = gauss_images * mask
+        gauss_avg_rmses.append(np.sqrt(np.mean((gauss_images - target) ** 2)))
+    plt.imshow(g_images[0,0])
+    plt.show()
+    plt.imshow(mask[0])
+    plt.show()
+    plt.imshow(g_outputs[0,0])
+    plt.show()
+    plt.imshow(target[0])
+    plt.show()
+    plt.imshow(gauss_images[0,0])
+    plt.show()
+    plt.plot(kms, gauss_avg_rmses)
+    plt.axhline(y=avg_rmse, color='r', linestyle='dashed')
+    plt.show()
+
+
+
+
+# ------------------------------------------
+# Load geodetic MDT and pass through CDAE
+g_images, g_paths = load_batch(g_dataset, batch_size)
+g_outputs = model(g_images)
+g_images, g_outputs = detach_tensors([g_images, g_outputs])
+lmask = land_true(g_images)
+mask = land_false(g_images)
+vmin, vmax = get_bounds(mdt=mdt)
+
+# if not mdt:
+#     g_outputs = g_outputs * mask
+
+# ------------------------------------------
+# Load NEMO images and calculate RMSE/SSIM
+nemo_images, nemo_paths = load_batch(nemo, batch_size)
+nemo_images = detach_tensors([nemo_images])
+nemo_images = nemo_images * mask
+avg_rmse = np.sqrt(np.mean((g_images - nemo_images) ** 2))
+avg_ssim = np.mean([ssim(nemo_image[0], g_image[0]) for nemo_image, g_image in zip(nemo_images, g_images)])
+
+
+avg_rmse = np.sqrt(np.mean((g_outputs - nemo_images) ** 2))
+avg_ssim = np.mean([ssim(nemo_image[0], g_output[0]) for nemo_image, g_output in zip(nemo_images, g_outputs)])
+
+# ------------------------------------------
+# Calculate Gaussian Filtered Geodetic MDTs and RMSE/SSIM between Gauss vs NEMO and Model vs NEMO
+# FWH_pixels  = 2.355 * sigma
+# FWH_km = (FWH_pixels / 4) * 111
+kms = np.arange(25, 501, 25)
+sigmas = ((kms * 4) / 111) / 2.355
+gauss_avg_rmses = []
+gauss_avg_ssim = []
+for sigma in sigmas:
+    gauss_images = [apply_gaussian(image, mdt, sigma) for image in g_images]
+    gauss_images = np.array(gauss_images)
+    gauss_avg_rmses.append(np.sqrt(np.mean((gauss_images - nemo_images) ** 2)))
+    gauss_avg_ssim.append(np.mean([ssim(nemo_image[0], gauss_image[0]) for nemo_image, gauss_image in zip(nemo_images, gauss_images)]))
+print('gauss rmse:', gauss_avg_rmses)
+print('gauss ssim:', gauss_avg_ssim)
+plt.imshow(nemo_images[0, 0])
+# plt.show()
+plt.close()
+plt.imshow(gauss_images[0, 0])
+# plt.show()
+plt.close()
+
+plt.plot(kms, gauss_avg_rmses)
+plt.axhline(y=avg_rmse, color='r', linestyle='dashed')
+plt.legend(["Gaussian filter output", "CDAE output at 200 epochs"], loc ="upper right")
+plt.xlabel('Gaussian Filter Half-weight Radius (km)', fontsize=12)
+plt.ylabel('RMSE', fontsize=12)
+# plt.ylim(bottom=0.14, top=0.23)
+plt.title('RMSE of Different Filtering Methods Against NEMO Data')
+plt.show()
+plt.close()
+
+# plt.plot(kms, gauss_avg_ssim)
+# plt.axhline(y=avg_ssim, color='r', linestyle='dashed')
+# plt.legend(["Gaussian filter output", "CDAE output at 200 epochs"], loc ="lower right")
+# plt.xlabel('Gaussian Filter Half-weight Radius (km)', fontsize=12)
+# plt.ylabel('SSIM', fontsize=12)
+# # plt.ylim(bottom=0.05, top=0.8)
+# plt.title('SSIM of Different Filtering Methods With NEMO Data')
+# plt.show()
+# plt.close()
+
+
+crs = ccrs.PlateCarree()
+# fig, axes  = plt.subplots(2, batch_size, figsize=(25, 10), subplot_kw={'projection': crs}, squeeze=False)
+# if mdt:
+#     g_images[lmask] = vmin
+#     g_outputs[lmask] = vmin
+
+# for i, (axrow, tensor) in enumerate(zip(axes, [g_images, g_outputs])):
+#     for j, ax in enumerate(axrow):
+#         split_path = g_paths[j][:len(g_paths[j])-4].split('_')
+#         x, y = int(split_path[-2]), int(split_path[-1])
+#         # w, h = tensor[j, 0].shape
+#         lons, lats, extent = get_spatial_params(x, y)
+#         im = plot_region(tensor[j, 0], ax, lons, lats, extent, vmin=vmin, vmax=vmax)
+# cbarheight = 0.75
+# bottom_pos = (1 - cbarheight)/2 - 0.005
+# cbarwidth = 0.01
+# left_pos = 0.92 # (should be half of cbarwidth to be center-aligned if orien=horiz)
+# cbar = get_cbar(fig, im, [left_pos, bottom_pos, cbarwidth, cbarheight], mdt)
+# plt.show()
+# plt.close()
+
+# -----------------------------------------
+# Load CMIP images with added synthetic noise
+images, targets, paths = load_batch(dataset, batch_size)
 outputs = model(images)
-
-outputs = outputs.detach().cpu().numpy()
-targets = targets.detach().cpu().numpy()
-images = images.detach().cpu().numpy()
-mask_0 = targets == 0
-mask = targets != 0
+images, outputs, targets = detach_tensors([images, outputs, targets])
+mask = land_false(targets)
+lmask = land_true(targets)
 
 if not mdt:
     outputs = outputs * mask
-    vmin = 0
-    vmax = 2
-else:
-    vmin = -2
-    vmax = 1
 
 residual = (targets - outputs) * mask
 
+
+# -------------------------------------------
 # Plot input, target, outputs for multiple regions
-crs = ccrs.PlateCarree()
-fig, axes  = plt.subplots(3, batch_size, subplot_kw={'projection': crs})
+fig, axes  = plt.subplots(3, batch_size, figsize=(25, 10), subplot_kw={'projection': crs})
 if mdt:
-    images[mask_0] = vmin
-    outputs[mask_0] = vmin
-    targets[mask_0] = vmin
+    images[lmask] = vmin
+    outputs[lmask] = vmin
+    targets[lmask] = vmin
 
 for i, (axrow, tensor) in enumerate(zip(axes, [images, outputs, targets])):
     for j, ax in enumerate(axrow):
@@ -169,42 +439,40 @@ for i, (axrow, tensor) in enumerate(zip(axes, [images, outputs, targets])):
         x, y = int(split_path[-2]), int(split_path[-1])
         # w, h = tensor[j, 0].shape
         lons, lats, extent = get_spatial_params(x, y)
-        plot_region(tensor[j, 0], ax, lons, lats, extent, vmin=vmin, vmax=vmax)
-plt.show()
+        im = plot_region(tensor[j, 0], ax, lons, lats, extent, vmin=vmin, vmax=vmax)
+cbarheight = 0.75
+bottom_pos = (1 - cbarheight)/2 - 0.005
+cbarwidth = 0.01
+left_pos = 0.92 # (should be half of cbarwidth to be center-aligned if orien=horiz)
+cbar = get_cbar(fig, im, [left_pos, bottom_pos, cbarwidth, cbarheight], mdt)
+# plt.show()
 plt.close()
 
 
 # Plot element wise RMSE across multiple regions
-x_coords = [0, 128, 128, 256, 256, 384, 384, 512, 512, 768, 768, 768, 768, 896, 896, 896] # 640, 640, 640, 640
-y_coords = [488, 360, 488, 360, 488, 360, 488, 232, 488, 104, 232, 360, 488, 232, 360, 488] # 104, 232, 360, 488
+rvmin = 0
+rvmax = 1.
+c_ticks = 11
+# if not mdt:
+#     rvmax = 0.2
+#     c_ticks = 11
+# else:
+#     rvmax = 0.35
+#     c_ticks = 8
+
 rmses = []
 for x, y in zip(x_coords, y_coords):
-    indices = []
-    for i in range(len(dataset.paths)):
-        split_path = dataset.paths[i][:len(dataset.paths[i])-4].split('_')
-        a, b = int(split_path[-2]), int(split_path[-1])
-        if x == a and y == b:
-            indices.append(i)
-    print(x, y)
-    print(indices)
-    regions = []
-    target_regions = []
-    for i in indices:
-        region, target = dataset[i]
-        regions.append(region)
-        target_regions.append(target)
+    regions = g_dataset.get_regions(x, y)
+    target = nemo.get_regions(x, y)[0]
     regions = torch.stack(regions)
-    target_regions = torch.stack(target_regions)
     output_regions = model(regions)
-
-    target_regions = target_regions.detach().cpu().numpy()
+    target = target.detach().cpu().numpy()
     output_regions = output_regions.detach().cpu().numpy()
-    mask = target_regions[0] != 0
+    mask = target != 0
 
-    rmse = np.sqrt(np.mean((output_regions - target_regions)**2, axis=0))
+    rmse = np.sqrt(np.mean((output_regions - target)**2, axis=0))
     rmse = rmse * mask
     rmses.append(rmse[0])
-
 fig, axes = plt.subplots(4, 4, subplot_kw={'projection': crs})
 for i, axrow in enumerate(axes):
     for j, ax in enumerate(axrow):
@@ -212,13 +480,19 @@ for i, axrow in enumerate(axes):
         x, y = x_coords[index], y_coords[index]
         lons, lats, extent = get_spatial_params(x, y)
         print(rmses[index].shape)
-        plot_region(rmses[index], ax, lons, lats, extent,
-            cmap='jet', vmin=0, vmax=0.35
+        r_plot = plot_region(rmses[index], ax, lons, lats, extent,
+            cmap='jet', vmin=rvmin, vmax=rvmax
 
         )
+cbarheight = 0.75
+bottom_pos = (1 - cbarheight)/2 - 0.005
+cbarwidth = 0.01
+left_pos = 0.92 # (should be half of cbarwidth to be center-aligned if orien=horiz)
+cax = fig.add_axes([left_pos, bottom_pos, cbarwidth, cbarheight])
+cax.tick_params(labelsize=9)
+cbar = fig.colorbar(r_plot, cax=cax, ticks=np.linspace(rvmin, rvmax, num=c_ticks))#, orientation='horizontal')
 plt.show()
-
-
+plt.close()
 
 
 
@@ -240,8 +514,6 @@ plt.show()
 # calculate squared pixel-wise error across batch axis with targets
 
 # mean across batch axis then root
-
-
 
 
 

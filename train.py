@@ -19,8 +19,8 @@ def imshow(img):
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 transform = transforms.ToTensor()
 
-mdt = True
-n_epochs = 200
+mdt = False
+n_epochs = 300
 if mdt:
     var = 'mdt'
 else:

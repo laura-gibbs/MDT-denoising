@@ -1,5 +1,7 @@
 from scipy.ndimage import gaussian_filter
 import numpy as np
+import math
+import os
 
 
 def define_dims(resolution):
@@ -52,3 +54,44 @@ def create_coords(resolution, central_lon=0, rads=False):
         latitude = np.deg2rad(latitude)
 
     return longitude, latitude
+
+
+def read_surface(filename, path=None, fortran=True, nans=True,
+                 transpose=False, rotate=True):
+    r"""Reshapes surface from 1d array into an array of
+    (II, JJ) records.
+
+    Ignores the header and footer of each record.
+
+    Args:
+        file (np.array): A .dat file containing a 1D array of floats
+            respresenting input surface.
+
+    Returns:
+        np.array: data of size (II, JJ)
+    """
+    order = 'F' if fortran else 'C'
+
+    if path is None:
+        path = ""
+
+    filepath = os.path.join(os.path.normpath(path), filename)
+    fid = open(filepath, mode='rb')
+    buffer = fid.read(4)
+    size = np.frombuffer(buffer, dtype=np.int32)[0]
+    shape = (int(math.sqrt(size//8)*2), int(math.sqrt(size//8)))
+    fid.seek(0)
+
+    # Loads Fortran array (CxR) or Python array (RxC)
+    floats = np.array(np.frombuffer(fid.read(), dtype=np.float32), order=order)
+    floats = floats[1:len(floats)-1]
+    floats = np.reshape(floats, shape, order=order)
+
+    if nans:
+        floats[floats <= -1.7e7] = np.nan
+    if transpose:
+        return floats.T
+    if rotate:
+        return np.rot90(floats, 1)
+
+    return floats
