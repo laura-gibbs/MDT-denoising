@@ -140,24 +140,32 @@ def get_plot_params(mdt=False, rmse=False):
     else:
         vmin = 0
         if rmse:
-            vmax = 0.2
-            cticks = 11
+            vmax = 0.4
+            cticks = 9
         else:
-            vmax = 1.5
+            vmax = 1.5 # Change back to 1.5
             cticks = 7
     return vmin, vmax, cticks
 
 
-def create_subplot(data, paths, mdt=False, rmse=False, batch_size=8, crs=ccrs.PlateCarree()):
+def create_subplot(data, regions, mdt=False, rmse=False, cols=4, crs=ccrs.PlateCarree(), titles=None):
     vmin, vmax, cticks = get_plot_params(mdt, rmse)
-    fig, axes  = plt.subplots(len(data), batch_size, figsize=(25, 10), subplot_kw={'projection': crs})
-    for i, (axrow, tensor) in enumerate(zip(axes, data)):
+    if rmse:
+        cmap = 'hot_r'
+    else:
+        cmap = 'turbo'
+    fig, axes  = plt.subplots(len(data) // cols, cols, figsize=(25, 10), subplot_kw={'projection': crs})
+    if titles is None:
+        titles = [''] * len(data)
+    for i, axrow in enumerate(axes):
         for j, ax in enumerate(axrow):
-            split_path = paths[j][:len(paths[j])-4].split('_')
-            x, y = int(split_path[-2]), int(split_path[-1])
+            # split_path = paths[j][:len(paths[j])-4].split('_')
+            # x, y = int(split_path[-2]), int(split_path[-1])
+            x, y = regions[i * len(axrow) + j]
             # w, h = tensor[j, 0].shape
             lons, lats, extent = get_spatial_params(x, y)
-            im = plot_region(tensor[j, 0], ax, lons, lats, extent, vmin=vmin, vmax=vmax)
+            im = plot_region(data[i * len(axrow) + j], ax, lons, lats, extent, vmin=vmin, vmax=vmax, cmap=cmap)
+            ax.set_title(titles[i * len(axrow) + j])
     cbarheight = 0.75
     bottom_pos = (1 - cbarheight)/2 - 0.005
     cbarwidth = 0.01
@@ -244,28 +252,29 @@ def compute_avg_residual(arrs, reference):
     return avg_residual
 
 
-def compute_rmsd(arr, reference, hw_size=5, mask=None, res=4):
+def compute_rmsd(residual, hw_size=5, mask=None, res=4):
     r"""
     Args:
         hw_size (integer): half width size of window
     """
-    squared_diff = (arr - reference)**2
+    squared_diff = residual**2
+
     # Get first dimension? and divide 360 by it to get degree resolution
     # might not work if they're torch tensors!! 
-    print(arr.shape[0])
-    # res = arr.shape[0]/360  # only true if it's a global map
-    rmsd = np.zeros_like(arr)
+    # print(residual.shape[0])
+    # res = residual.shape[0]/360  # only true if it's a global map
+    rmsd = np.zeros_like(residual)
     hw = int(hw_size * res) # kernel size in pixels
-    print(hw)
+    # print(hw)
     # Add reflected padding of size hw
-    padded_arr = cv2.copyMakeBorder(arr, hw, hw, hw, hw, borderType=cv2.BORDER_REFLECT)
+    squared_diff = cv2.copyMakeBorder(squared_diff, hw, hw, hw, hw, borderType=cv2.BORDER_REFLECT)
     # Convolve window of sixe hw across image and average
-    for i in range(arr.shape[0]):
-        for j in range(arr.shape[1]):
+    for i in range(residual.shape[0]):
+        for j in range(residual.shape[1]):
         # centre of the moving window index [i,j]
-            window = padded_arr[i:i+hw*2,j:j+hw*2]
-            print(np.shape(window))
-            print(np.shape(rmsd))
+            window = squared_diff[i:i+hw*2,j:j+hw*2]
+            # print(np.shape(window))
+            # print(np.shape(rmsd))
             rmsd[i,j] = np.sqrt(np.mean(window))
     if mask is not None:
         return rmsd * mask
@@ -288,16 +297,22 @@ def main():
     dataset = CAEDataset(region_dir=f'../a_mdt_data/HR_model_data/{var}_testing_regions', quilt_dir=f'./quilting/DCGAN_{var}', mdt=mdt)
     g_dataset = CAEDataset(region_dir=f'../a_mdt_data/geodetic_cdae/{var}', quilt_dir=None, mdt=mdt)
     nemo = CAEDataset(region_dir=f'../a_mdt_data/HR_model_data/orca_{var}_regions', quilt_dir=None, mdt=mdt)
-    cls18 = CAEDataset(region_dir=f'../a_mdt_data/HR_model_data/cls18_{var}_regions', quilt_dir=None, mdt=mdt)
+    cls = CAEDataset(region_dir=f'../a_mdt_data/HR_model_data/cls18_{var}_regions', quilt_dir=None, mdt=mdt)
+
+
+    test = np.load('../a_mdt_data/HR_model_data/cls18_cs_regions/cls18_cs_0_488.npy')
+    # plt.imshow(test)
+    # plt.show()
 
     batch_size = 8
     batch_intersect = 0
 
-    x_coords = [0, 128, 128, 256, 256, 384, 384]#, 512, 512, 768, 768, 768, 768, 896, 896, 896] # 640, 640, 640, 640
-    y_coords = [488, 360, 488, 360, 488, 360, 488]#, 232, 488, 104, 232, 360, 488, 232, 360, 488] # 104, 232, 360, 488
+    x_coords = [0, 128, 128, 256, 256, 384, 384, 512]#, 512, 768, 768, 768, 768, 896, 896, 896] # 640, 640, 640, 640
+    y_coords = [488, 360, 488, 360, 488, 360, 488, 232]#, 488, 104, 232, 360, 488, 232, 360, 488] # 104, 232, 360, 488
 
 
     avg_rmses = []
+    rmsds = []
     for x, y in zip(x_coords, y_coords):
         g_images = g_dataset.get_regions(x, y)
         g_images = torch.stack(g_images)
@@ -308,41 +323,105 @@ def main():
         target = target * mask
         g_images = g_images * mask
         g_outputs = g_outputs * mask
-        avg_residual = compute_avg_residual(g_images, target)
-        print(np.shape(avg_residual))
-        rmsd = compute_rmsd(avg_residual, target, mask=mask)
-        avg_rmses.append(rmsd)
-        plt.imshow(rmsd[0], vmin=0.3)
-        plt.show()
-        # avg_rmse = np.sqrt(np.mean((g_outputs - target) ** 2))
-        # avg_rmses.append(avg_rmse)
+        avg_residual = compute_avg_residual(g_outputs, target)
+    
+        # # -------
+        # # Felix's code to calculate a second residual and plot both side by side
+        # # -------
+        # target2 = cls.get_regions(x,y)[0]
+        # avg_residual2 = compute_avg_residual(g_outputs, target2.numpy() * mask)
+        # fig, ax = plt.subplots(1,2)
+        # ax[0].imshow(avg_residual)
+        # ax[1].imshow(avg_residual2)
+        # plt.show()
 
+        rmsd = compute_rmsd(avg_residual, hw_size=3, mask=mask)
+        rmsds.append(rmsd[0])
+        lons, lats, extent = get_spatial_params(x, y)
+        # fig, ax = plt.subplots(1, 1, subplot_kw={'projection':ccrs.PlateCarree()})
+        # im = plot_region(rmsd[0], ax, lons, lats, extent, cmap='hot')
+        # plt.imshow(rmsd[0], vmin=0.3, vmax=1)
+        # plt.show()
+        avg_rmse = np.sqrt(np.mean((g_outputs - target) ** 2))
+        avg_rmses.append(avg_rmse)
+  
 
-        # Calculate Gaussian Filtered Geodetic MDTs and RMSE/SSIM between Gauss vs NEMO and Model vs NEMO
-        kms = np.arange(25, 501, 25)
-        sigmas = ((kms * 4) / 111) / 2.355
-        # sigmas = np.arange(0.5, 5.0, 0.25)
-        gauss_avg_rmses = []
-        for sigma in sigmas:
-            gauss_images = [apply_gaussian(image, mdt, sigma) for image in g_images]
-            gauss_images = np.array(gauss_images)
-            gauss_images = gauss_images * mask
-            gauss_avg_rmses.append(np.sqrt(np.mean((gauss_images - target) ** 2)))
-        plt.imshow(g_images[0,0])
-        plt.show()
-        plt.imshow(mask[0])
-        plt.show()
-        plt.imshow(g_outputs[0,0])
-        plt.show()
-        plt.imshow(target[0])
-        plt.show()
-        plt.imshow(gauss_images[0,0])
-        plt.show()
-        plt.plot(kms, gauss_avg_rmses)
-        plt.axhline(y=avg_rmse, color='r', linestyle='dashed')
-        plt.show()
+        # # Calculate Gaussian Filtered Geodetic MDTs and RMSE/SSIM between Gauss vs NEMO and Model vs NEMO
+        # kms = np.arange(25, 501, 25)
+        # sigmas = ((kms * 4) / 111) / 2.355
+        # # sigmas = np.arange(0.5, 5.0, 0.25)
+        # gauss_rmsds = []
+        # for sigma in sigmas:
+        #     gauss_images = [apply_gaussian(image, mdt, sigma) for image in g_images]
+        #     gauss_images = np.array(gauss_images)
+        #     gauss_images = gauss_images * mask
+        #     avg_residual = compute_avg_residual(gauss_images, target)
+        #     gauss_rmsd = compute_rmsd(avg_residual, hw_size=3, mask=mask)
+        #     gauss_rmsds.append(gauss_rmsd)
+        #     # gauss_avg_rmses.append(np.sqrt(np.mean((gauss_images - target) ** 2)))
 
+        # plt.imshow(g_images[0,0])
+        # plt.show()
+        # plt.imshow(mask[0])
+        # plt.show()
+        # plt.imshow(g_outputs[0,0])
+        # plt.show()
+        # plt.imshow(target[0])
+        # plt.show()
+        # plt.imshow(gauss_images[0,0])
+        # plt.show()
 
+        # gauss_avg_rmse = np.mean(gauss_rmsds, axis=(2,3))
+        # avg_rmse = np.mean(rmsd, axis=(1,2))
+        # print(np.shape(avg_rmse))
+        # plt.plot(kms, gauss_avg_rmse)
+        # plt.axhline(y=avg_rmse, color='r', linestyle='dashed')
+        # plt.show()
+
+    # create_subplot(rmsds, list(zip(x_coords, y_coords)), mdt=False, rmse=True, )
+    # plt.show()
+
+    # --------
+    # Generate predictions for model as a function of epochs trained
+    # --------
+    x, y = 0, 488
+    rmsds = []
+    residuals = []
+    epochs = list(range(25, 225, 25))
+    for epoch in epochs:
+        model.load_state_dict(torch.load(f'./models/25epochs/{epoch}e_{var}_model_cdae.pth'))
+        
+        g_images = g_dataset.get_regions(x, y)
+        g_images = torch.stack(g_images)
+        g_outputs = model(g_images)
+        target = nemo.get_regions(x,y)[0]
+        g_images, g_outputs, target = detach_tensors([g_images, g_outputs, target])
+        mask = land_false(g_images)[0]
+        target = target * mask
+        g_images = g_images * mask
+        g_outputs = g_outputs * mask
+        avg_residual = compute_avg_residual(g_outputs, target)
+        residuals.append(avg_residual)
+
+        rmsd = compute_rmsd(avg_residual, hw_size=4, mask=mask)
+        rmsds.append(rmsd[0])
+
+    
+    create_subplot(rmsds, [[x, y]] * 8, mdt=False, rmse=True, titles=[f'{epoch} epochs' for epoch in epochs])
+    plt.show()
+    create_subplot(residuals, [[x, y]] * 8, mdt=True, rmse=False, titles=[f'{epoch} epochs' for epoch in epochs])
+    plt.show()
+
+    # fig, axs = plt.subplots(2,3, subplot_kw={'projection':ccrs.PlateCarree()})
+    # im = plot_region(rmsds, axs, lons, lats, extent, vmin=0.3, cmap='hot')
+    # axs[0,0].imshow(rmsds[0][0], cmap='hot', vmin=0.3)
+    # axs[0,1].imshow(rmsds[1][0], cmap='hot', vmin=0.3)
+    # axs[0,2].imshow(rmsds[2][0], cmap='hot', vmin=0.3)
+    # axs[1,0].imshow(rmsds[3][0], cmap='hot', vmin=0.3)
+    # axs[1,1].imshow(rmsds[4][0], cmap='hot', vmin=0.3)
+    # axs[1,2].imshow(rmsds[5][0], cmap='hot', vmin=0.3)
+    # axs[1,2].imshow(rmsds[6][0])
+    # axs[1,3].imshow(rmsds[7][0])
 
 
     # ------------------------------------------
