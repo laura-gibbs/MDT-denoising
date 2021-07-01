@@ -231,16 +231,20 @@ def get_cbar(fig, im, cbar_pos, mdt=False, rmse=False, orientation='vertical', l
     return cbar
 
 
-def avg_residual(arrs, reference):
+def compute_avg_residual(arrs, reference):
     r"""
     Args:
         arrs(list): list of mdt/cs arrays
         reference(arr): single reference array 
     """
-    avg_residual = np.mean(arrs - reference, axis=0) 
+    residual = arrs - reference
+    print(np.shape(residual))
+    avg_residual = np.mean(arrs - reference, axis=(0,1))
+    print(np.shape(avg_residual)) 
+    return avg_residual
 
 
-def compute_rmsd(arr, reference, hw_size=5, mask=None):
+def compute_rmsd(arr, reference, hw_size=5, mask=None, res=4):
     r"""
     Args:
         hw_size (integer): half width size of window
@@ -248,16 +252,20 @@ def compute_rmsd(arr, reference, hw_size=5, mask=None):
     squared_diff = (arr - reference)**2
     # Get first dimension? and divide 360 by it to get degree resolution
     # might not work if they're torch tensors!! 
-    res = arr.shape[0]/360
+    print(arr.shape[0])
+    # res = arr.shape[0]/360  # only true if it's a global map
     rmsd = np.zeros_like(arr)
-    hw = hw_size * res # kernel size in pixels
+    hw = int(hw_size * res) # kernel size in pixels
+    print(hw)
     # Add reflected padding of size hw
     padded_arr = cv2.copyMakeBorder(arr, hw, hw, hw, hw, borderType=cv2.BORDER_REFLECT)
     # Convolve window of sixe hw across image and average
-    for i in range(hw, padded_arr.shape[0] - hw):
-        for j in range(hw, padded_arr.shape[1] - hw):
+    for i in range(arr.shape[0]):
+        for j in range(arr.shape[1]):
         # centre of the moving window index [i,j]
-            window = padded_arr[i-hw:i+hw,j-hw:j+hw]
+            window = padded_arr[i:i+hw*2,j:j+hw*2]
+            print(np.shape(window))
+            print(np.shape(rmsd))
             rmsd[i,j] = np.sqrt(np.mean(window))
     if mask is not None:
         return rmsd * mask
@@ -300,15 +308,14 @@ def main():
         target = target * mask
         g_images = g_images * mask
         g_outputs = g_outputs * mask
-        avg_residual = avg_residual(g_images, nemo)
-        rmsd = compute_rmsd(avg_residual, nemo, mask=mask)
+        avg_residual = compute_avg_residual(g_images, target)
+        print(np.shape(avg_residual))
+        rmsd = compute_rmsd(avg_residual, target, mask=mask)
         avg_rmses.append(rmsd)
-        plt.imshow(rmsd)
+        plt.imshow(rmsd[0], vmin=0.3)
         plt.show()
         # avg_rmse = np.sqrt(np.mean((g_outputs - target) ** 2))
         # avg_rmses.append(avg_rmse)
-
-
 
 
         # Calculate Gaussian Filtered Geodetic MDTs and RMSE/SSIM between Gauss vs NEMO and Model vs NEMO
