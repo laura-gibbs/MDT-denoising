@@ -85,22 +85,15 @@ def get_region_coords():
     return x_coords, y_coords
 
 
-def plot_region(tensor, ax, lons, lats, extent, crs=ccrs.PlateCarree(), **plot_kwargs):
-    if 'cmap' not in plot_kwargs:
-        plot_kwargs['cmap']='turbo'
-    x0, x1, y0, y1 = extent
-    im = ax.pcolormesh(lons, lats, tensor, transform=crs, **plot_kwargs)
-    ax.set_extent((x0, x1, y0, y1), crs=crs)
-    # longitude[longitude>180] = longitude[longitude>180] - 360
-    ax.set_xticks(np.linspace(x1, x0, 5), crs=crs)
-    ax.set_yticks(np.linspace(y0, y1, 5), crs=crs)
-    lat_formatter = LatitudeFormatter()
-    lon_formatter = LongitudeFormatter()
-    ax.xaxis.set_major_formatter(lon_formatter)
-    ax.yaxis.set_major_formatter(lat_formatter)
-    ax.tick_params(axis='both', which='major', labelsize=7)
-    ax.add_feature(GSHHSFeature(scale='intermediate', facecolor='lightgrey', linewidth=0.2))
-    return im
+class MidpointNormalize(mpl.colors.Normalize):
+    """Normalise the colorbar."""
+    def __init__(self, vmin=None, vmax=None, midpoint=None, clip=False):
+        self.midpoint = midpoint
+        mpl.colors.Normalize.__init__(self, vmin, vmax, clip)
+
+    def __call__(self, value, clip=None):
+        x, y = [self.vmin, self.midpoint, self.vmax], [0, 0.5, 1]
+        return np.ma.masked_array(np.interp(value, x, y), np.isnan(value))
 
 
 def get_spatial_params(x, y, w=128, h=128, resolution=0.25):
@@ -114,69 +107,6 @@ def get_spatial_params(x, y, w=128, h=128, resolution=0.25):
         x1 -= 360
     extent = x0, x1, y0, y1
     return lons, lats, extent
-
-
-class MidpointNormalize(mpl.colors.Normalize):
-    """Normalise the colorbar."""
-    def __init__(self, vmin=None, vmax=None, midpoint=None, clip=False):
-        self.midpoint = midpoint
-        mpl.colors.Normalize.__init__(self, vmin, vmax, clip)
-
-    def __call__(self, value, clip=None):
-        x, y = [self.vmin, self.midpoint, self.vmax], [0, 0.5, 1]
-        return np.ma.masked_array(np.interp(value, x, y), np.isnan(value))
-
-
-def get_plot_params(mdt=False, rmse=False):
-    if mdt:
-        if rmse:
-            vmin = 0
-            vmax = 0.35
-            cticks = 8
-        else:
-            vmin = -1.5
-            vmax = 1.5
-            cticks = 7
-    else:
-        vmin = 0
-        if rmse:
-            vmax = 0.4
-            cticks = 9
-        else:
-            vmax = 1.5 # Change back to 1.5
-            cticks = 7
-    return vmin, vmax, cticks
-
-
-def create_subplot(data, regions, mdt=False, rmse=False, cols=4, crs=ccrs.PlateCarree(), titles=None):
-    vmin, vmax, cticks = get_plot_params(mdt, rmse)
-    if rmse:
-        cmap = 'hot_r'
-    else:
-        cmap = 'turbo'
-    fig, axes  = plt.subplots(len(data) // cols, cols, figsize=(25, 10), subplot_kw={'projection': crs})
-    if titles is None:
-        titles = [''] * len(data)
-    for i, axrow in enumerate(axes):
-        for j, ax in enumerate(axrow):
-            # split_path = paths[j][:len(paths[j])-4].split('_')
-            # x, y = int(split_path[-2]), int(split_path[-1])
-            x, y = regions[i * len(axrow) + j]
-            # w, h = tensor[j, 0].shape
-            lons, lats, extent = get_spatial_params(x, y)
-            im = plot_region(data[i * len(axrow) + j], ax, lons, lats, extent, vmin=vmin, vmax=vmax, cmap=cmap)
-            ax.set_title(titles[i * len(axrow) + j])
-    cbarheight = 0.75
-    bottom_pos = (1 - cbarheight)/2 - 0.005
-    cbarwidth = 0.01
-    left_pos = 0.92 # (should be half of cbarwidth to be center-aligned if orien=horiz)
-    cbar_ax = fig.add_axes([left_pos, bottom_pos, cbarwidth, cbarheight])
-    cbar_ax.tick_params(labelsize=9)
-    cbar = fig.colorbar(im, cax=cbar_ax, ticks=np.linspace(vmin, vmax, num=cticks))#, orientation='horizontal')
-    plt.show()
-    plt.close()
-
-
 
 
 def load_batch(dataset, batch_size, batch_intersect=0):
@@ -281,6 +211,87 @@ def compute_rmsd(residual, hw_size=5, mask=None, res=4):
     return rmsd
 
 
+def plot_region(tensor, ax, lons, lats, extent, crs=ccrs.PlateCarree(), **plot_kwargs):
+    if 'cmap' not in plot_kwargs:
+        plot_kwargs['cmap']='turbo'
+    x0, x1, y0, y1 = extent
+    im = ax.pcolormesh(lons, lats, tensor, transform=crs, **plot_kwargs)
+    ax.set_extent((x0, x1, y0, y1), crs=crs)
+    # longitude[longitude>180] = longitude[longitude>180] - 360
+    ax.set_xticks(np.linspace(x1, x0, 5), crs=crs)
+    ax.set_yticks(np.linspace(y0, y1, 5), crs=crs)
+    lat_formatter = LatitudeFormatter()
+    lon_formatter = LongitudeFormatter()
+    ax.xaxis.set_major_formatter(lon_formatter)
+    ax.yaxis.set_major_formatter(lat_formatter)
+    ax.tick_params(axis='both', which='major', labelsize=7)
+    ax.add_feature(GSHHSFeature(scale='intermediate', facecolor='lightgrey', linewidth=0.2))
+    return im
+
+
+def get_plot_params(mdt=False, rmse=False, residual=False):
+    if mdt:
+        if rmse:
+            vmin = 0
+            vmax = 0.3
+            cticks = 7
+        else:
+            vmin = -1.5
+            vmax = 1.5
+            cticks = 7
+    else:
+        if rmse:
+            vmin = 0
+            vmax = 0.15
+            cticks = 6
+        else:
+            vmin = 0
+            vmax = 1.5 # Change back to 1.5
+            cticks = 7
+    if residual:
+        vmin = -0.6
+        vmax = 0.6
+        cticks = 11
+    return vmin, vmax, cticks
+
+
+def create_subplot(data, regions, mdt=False, rmse=False, residual=False, cols=3, crs=ccrs.PlateCarree(), titles=None, big_title=None):
+    vmin, vmax, cticks = get_plot_params(mdt, rmse, residual)
+    if rmse:
+        cmap = 'jet' #'hot_r'
+    elif residual:
+        cmap='bwr'#, norm=MidpointNormalize(midpoint=0.)
+    else:
+        cmap = 'turbo'
+    fig, axes  = plt.subplots(len(data) // cols, cols, figsize=(25, 10), subplot_kw={'projection': crs})#, squeeze=False)
+    if titles is None:
+        titles = [''] * len(data)
+    for i, axrow in enumerate(axes):
+        for j, ax in enumerate(axrow):
+            # split_path = paths[j][:len(paths[j])-4].split('_')
+            # x, y = int(split_path[-2]), int(split_path[-1])
+            x, y = regions[i * len(axrow) + j]
+            # w, h = tensor[j, 0].shape
+            lons, lats, extent = get_spatial_params(x, y)
+            im = plot_region(data[i * len(axrow) + j], ax, lons, lats, extent, vmin=vmin, vmax=vmax, cmap=cmap)
+            ax.set_title(titles[i * len(axrow) + j])
+    cbarheight = 0.75
+    bottom_pos = (1 - cbarheight)/2 - 0.005
+    cbarwidth = 0.01
+    left_pos = 0.92 # (should be half of cbarwidth to be center-aligned if orien=horiz)
+    cbar_ax = fig.add_axes([left_pos, bottom_pos, cbarwidth, cbarheight])
+    cbar_ax.tick_params(labelsize=9)
+    cbar = fig.colorbar(im, cax=cbar_ax, ticks=np.linspace(vmin, vmax, num=cticks))#, orientation='horizontal')
+    if big_title is not None:
+        fig.suptitle(big_title, fontsize=16)
+    fig.tight_layout()
+    fig.subplots_adjust(top=0.88)
+    plt.show()
+    plt.close()
+
+
+
+
 def main():
     mdt = False
     n_epochs = 200
@@ -299,16 +310,54 @@ def main():
     nemo = CAEDataset(region_dir=f'../a_mdt_data/HR_model_data/orca_{var}_regions', quilt_dir=None, mdt=mdt)
     cls = CAEDataset(region_dir=f'../a_mdt_data/HR_model_data/cls18_{var}_regions', quilt_dir=None, mdt=mdt)
 
-
-    test = np.load('../a_mdt_data/HR_model_data/cls18_cs_regions/cls18_cs_0_488.npy')
-    # plt.imshow(test)
-    # plt.show()
-
-    batch_size = 8
+    batch_size = 6
     batch_intersect = 0
-
     x_coords = [0, 128, 128, 256, 256, 384, 384, 512]#, 512, 768, 768, 768, 768, 896, 896, 896] # 640, 640, 640, 640
     y_coords = [488, 360, 488, 360, 488, 360, 488, 232]#, 488, 104, 232, 360, 488, 232, 360, 488] # 104, 232, 360, 488
+
+    # --------
+    # Generate predictions for model as a function of epochs trained
+    # --------
+    x, y = 384, 488
+    epoch_inc = 25
+    rmsds = []
+    # print(np.shape(nemo.get_regions(x,y)[0]))
+
+    g_images = g_dataset.get_regions(x, y)
+    g_images = torch.stack(g_images)
+    target = cls.get_regions(x,y)[0]
+    g_images, target = detach_tensors([g_images, target])
+    mask = land_false(g_images)[0]
+    target = target * mask
+    g_images = g_images * mask
+
+    residuals = [compute_avg_residual(g_images, target)]
+    print(len(residuals))
+
+    epochs = list(range(epoch_inc, 175, epoch_inc))
+    print(epochs)
+    for epoch in epochs:
+        g_images = g_dataset.get_regions(x, y)
+        g_images = torch.stack(g_images)
+        target = cls.get_regions(x,y)[0]
+        model.load_state_dict(torch.load(f'./models/{epoch_inc}epochs_{var}/{epoch}e_{var}_model_cdae.pth'))
+        g_outputs = model(g_images)
+        g_images, g_outputs, target = detach_tensors([g_images, g_outputs, target])
+        mask = land_false(g_images)[0]
+        target = target * mask
+        g_images = g_images * mask
+        g_outputs = g_outputs * mask
+        avg_residual = compute_avg_residual(g_outputs, target)
+        residuals.append(avg_residual)
+        print(len(residuals))
+        rmsd = compute_rmsd(avg_residual, hw_size=5, mask=mask)
+        rmsds.append(rmsd[0])
+    print(np.shape(g_outputs))
+    create_subplot(g_outputs.squeeze(1), [[x, y]] * batch_size, mdt=False, rmse=False, residual=False, titles=[f'{epoch} epochs' for epoch in epochs])#, big_title='RMSD between network output and cls - trained over a different number of epochs')    
+    create_subplot(g_images.squeeze(1), [[x, y]] * batch_size, mdt=False, rmse=False, residual=False, titles=[f'{epoch} epochs' for epoch in epochs])
+    print(len(residuals))
+    create_subplot(rmsds, [[x, y]] * batch_size, mdt=False, rmse=True, titles=[f'{epoch} epochs' for epoch in epochs], big_title='RMSD between network output and CLS18 - trained over a different number of epochs')    
+    create_subplot(residuals, [[x, y]] * batch_size, mdt=False, rmse=False, residual=True, titles=['Unfiltered'] + [f'{epoch} epochs' for epoch in epochs], big_title='Residual difference (Network Output - CLS18) trained over a different number of epochs')
 
 
     avg_rmses = []
@@ -317,7 +366,7 @@ def main():
         g_images = g_dataset.get_regions(x, y)
         g_images = torch.stack(g_images)
         g_outputs = model(g_images)
-        target = nemo.get_regions(x,y)[0]
+        target = cls.get_regions(x,y)[0]
         g_images, g_outputs, target = detach_tensors([g_images, g_outputs, target])
         mask = land_false(g_images)[0]
         target = target * mask
@@ -381,36 +430,6 @@ def main():
     # create_subplot(rmsds, list(zip(x_coords, y_coords)), mdt=False, rmse=True, )
     # plt.show()
 
-    # --------
-    # Generate predictions for model as a function of epochs trained
-    # --------
-    x, y = 0, 488
-    rmsds = []
-    residuals = []
-    epochs = list(range(25, 225, 25))
-    for epoch in epochs:
-        model.load_state_dict(torch.load(f'./models/25epochs/{epoch}e_{var}_model_cdae.pth'))
-        
-        g_images = g_dataset.get_regions(x, y)
-        g_images = torch.stack(g_images)
-        g_outputs = model(g_images)
-        target = nemo.get_regions(x,y)[0]
-        g_images, g_outputs, target = detach_tensors([g_images, g_outputs, target])
-        mask = land_false(g_images)[0]
-        target = target * mask
-        g_images = g_images * mask
-        g_outputs = g_outputs * mask
-        avg_residual = compute_avg_residual(g_outputs, target)
-        residuals.append(avg_residual)
-
-        rmsd = compute_rmsd(avg_residual, hw_size=4, mask=mask)
-        rmsds.append(rmsd[0])
-
-    
-    create_subplot(rmsds, [[x, y]] * 8, mdt=False, rmse=True, titles=[f'{epoch} epochs' for epoch in epochs])
-    plt.show()
-    create_subplot(residuals, [[x, y]] * 8, mdt=True, rmse=False, titles=[f'{epoch} epochs' for epoch in epochs])
-    plt.show()
 
     # fig, axs = plt.subplots(2,3, subplot_kw={'projection':ccrs.PlateCarree()})
     # im = plot_region(rmsds, axs, lons, lats, extent, vmin=0.3, cmap='hot')

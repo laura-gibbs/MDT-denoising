@@ -77,7 +77,7 @@ for epoch in range(1, n_epochs+1):
             train_loss
             ))
         if epoch%10==0:
-            torch.save(model.state_dict(), f'C:/Users/oa18724/OneDrive - University of Bristol/models/{epoch}e_{var}_model_cdae.pth')
+            torch.save(model.state_dict(), f'models/{epoch}e_{var}_model_cdae.pth')
 
 torch.save(model.state_dict(), f'models/{n_epochs}e_{var}_model_cdae.pth')
 
