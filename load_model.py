@@ -9,7 +9,7 @@ from denoising.data import CAEDataset
 import cartopy.crs as ccrs
 from cartopy.mpl.ticker import LongitudeFormatter, LatitudeFormatter
 from cartopy.feature import GSHHSFeature
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filte
 from skimage.metrics import structural_similarity as ssim
 import cv2
 
@@ -466,6 +466,11 @@ def main():
 
     avg_rmse = np.sqrt(np.mean((g_outputs - nemo_images) ** 2))
     avg_ssim = np.mean([ssim(nemo_image[0], g_output[0]) for nemo_image, g_output in zip(nemo_images, g_outputs)])
+
+
+    # Calculate Gaussian filtered MDT using rb_gaussian
+    # --------------------------------------------
+
 
     # ------------------------------------------
     # Calculate Gaussian Filtered Geodetic MDTs and RMSE/SSIM between Gauss vs NEMO and Model vs NEMO
