@@ -10,17 +10,22 @@ import matplotlib.pyplot as plt
 from torch.utils.data.sampler import SubsetRandomSampler
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
+from scipy import interpolate
 
 
 def imshow(img):
     img = img / 2 + 0.5
     plt.imshow(np.transpose(img, (1, 2, 0)))
 
+
+def interpolate(img, scale):
+    return nn.functional.interpolate(img, scale_factor=scale)
+
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 transform = transforms.ToTensor()
 
-mdt = True
-n_epochs = 80
+mdt = False
+n_epochs = 161
 if mdt:
     var = 'mdt'
 else:
@@ -37,6 +42,9 @@ test_data = CAEDataset(
     mdt=mdt
     )
 
+r = 2
+a = 5
+exp_epochs = [a * r**i for i in range(6)]
 
 num_workers = 0
 # batch_size = 64
@@ -60,11 +68,29 @@ for epoch in range(1, n_epochs+1):
         images = data[0].to(device)
         targets = data[1].to(device)
         outputs = model(images)
-        loss = criterion(outputs, targets)
         land_mask = targets != 0
-        loss = loss * land_mask
-        loss = loss.mean()
+        # print('outputs shape: ', outputs.shape)
+        # print('targets shape: ', targets.shape)
+        # print('land mask shape: ', land_mask.shape)
+        # print('output type: ', type(outputs))
+        # print('target type: ', type(targets))
+        # print('land mask type: ', type(land_mask))
+
+        losses = []
+        for scale in [0.25, 0.5, 1, 2, 4]:
+            loss = criterion(interpolate(outputs, scale=scale), interpolate(targets, scale=scale))
+            # print('scale: ', scale)
+            land_mask = land_mask.float()
+            mask = interpolate(land_mask, scale=scale)
+            mask = mask.bool()
+            # print('loss shape: ', loss.shape)
+            # print('land mask shape: ', mask.shape)
+            loss = loss * mask
+            loss = loss.mean()
+            losses.append(loss)
         optimizer.zero_grad()
+        # loss = 0.3 * losses[0] etc
+        loss = sum(losses)
         loss.backward()
         optimizer.step()
         train_loss += loss.item()*images.size(0)
@@ -76,10 +102,13 @@ for epoch in range(1, n_epochs+1):
             n_epochs,
             train_loss
             ))
-        if epoch%10==0:
-            torch.save(model.state_dict(), f'models/{epoch}e_{var}_model_cdae.pth')
+        
+        if epoch in exp_epochs:
+            torch.save(model.state_dict(), f'models/multiscale_loss_{var}/{epoch}e_{var}_model_cdae.pth')
 
-torch.save(model.state_dict(), f'models/{n_epochs}e_{var}_model_cdae.pth')
+        #if epoch%10==0:
+
+# torch.save(model.state_dict(), f'models/{n_epochs}e_{var}_model_cdae.pth')
 
 inputs, targets = next(iter(test_loader))
 inputs = inputs.to(device)

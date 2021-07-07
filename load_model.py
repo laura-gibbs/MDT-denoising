@@ -176,10 +176,26 @@ def compute_avg_residual(arrs, reference):
         reference(arr): single reference array 
     """
     residual = arrs - reference
-    print(np.shape(residual))
     avg_residual = np.mean(arrs - reference, axis=(0,1))
-    print(np.shape(avg_residual)) 
     return avg_residual
+
+
+def compute_avg_rmsd(arrs, reference, **kwargs):
+    r"""
+    Args:
+        arrs(list):
+        reference(arr)
+    """
+    residuals = arrs - reference
+    rmsds = np.array([compute_rmsd(residual[0], **kwargs) for residual in residuals])
+    # for i in range(rmsds.shape[0]):
+    #     plt.imshow(rmsds[i, 0])
+    #     plt.show()
+    # print(rmsds.shape)
+    # print('here', np.mean(rmsds, axis=0).shape)
+    return np.mean(rmsds, axis=0)
+
+
 
 
 def compute_rmsd(residual, hw_size=5, mask=None, res=4):
@@ -233,7 +249,7 @@ def get_plot_params(mdt=False, rmse=False, residual=False):
     if mdt:
         if rmse:
             vmin = 0
-            vmax = 0.3
+            vmax = 0.2
             cticks = 7
         else:
             vmin = -1.5
@@ -243,7 +259,7 @@ def get_plot_params(mdt=False, rmse=False, residual=False):
         if rmse:
             vmin = 0
             vmax = 0.15
-            cticks = 6
+            cticks = 7
         else:
             vmin = 0
             vmax = 1.5 # Change back to 1.5
@@ -294,7 +310,7 @@ def create_subplot(data, regions, mdt=False, rmse=False, residual=False, cols=3,
 
 def main():
     mdt = False
-    n_epochs = 200
+    n_epochs = 160
 
     if mdt:
         var = 'mdt'
@@ -302,10 +318,11 @@ def main():
         var = 'cs'
 
     model = ConvAutoencoder()
-    model.load_state_dict(torch.load(f'./models/{n_epochs}e_{var}_model_cdae.pth'))
+    # # model.load_state_dict(torch.load(f'./models/exp_epochs_{var}/{n_epochs}e_{var}_model_cdae.pth'))
     model.eval()
 
-    dataset = CAEDataset(region_dir=f'../a_mdt_data/HR_model_data/{var}_testing_regions', quilt_dir=f'./quilting/DCGAN_{var}', mdt=mdt)
+    m_dataset = CAEDataset(region_dir=f'../a_mdt_data/HR_model_data/{var}_testing_regions', quilt_dir=f'./quilting/DCGAN_{var}', mdt=mdt)
+    t_dataset = CAEDataset(region_dir=f'../a_mdt_data/HR_model_data/{var}_testing_regions', quilt_dir=None, mdt=mdt)
     g_dataset = CAEDataset(region_dir=f'../a_mdt_data/geodetic_cdae/{var}', quilt_dir=None, mdt=mdt)
     nemo = CAEDataset(region_dir=f'../a_mdt_data/HR_model_data/orca_{var}_regions', quilt_dir=None, mdt=mdt)
     cls = CAEDataset(region_dir=f'../a_mdt_data/HR_model_data/cls18_{var}_regions', quilt_dir=None, mdt=mdt)
@@ -318,10 +335,8 @@ def main():
     # --------
     # Generate predictions for model as a function of epochs trained
     # --------
-    x, y = 384, 488
+    x, y = 0, 488
     epoch_inc = 25
-    rmsds = []
-    # print(np.shape(nemo.get_regions(x,y)[0]))
 
     g_images = g_dataset.get_regions(x, y)
     g_images = torch.stack(g_images)
@@ -331,16 +346,31 @@ def main():
     target = target * mask
     g_images = g_images * mask
 
-    residuals = [compute_avg_residual(g_images, target)]
-    print(len(residuals))
+    sigma = ((320 * 4) / 111) / 2.355
+    # nan_images = g_images
+    # nan_images[nan_images ==0] = np.nan
+    gauss_images = [apply_gaussian(image, mdt, sigma) for image in g_images]
+    gauss_images = np.array(gauss_images)
+    gauss_rmsd = compute_avg_rmsd(gauss_images, target, hw_size=5, mask=mask)
+    plt.imshow(gauss_rmsd[0], cmap='jet', vmax=0.2)
+    plt.show()
 
-    epochs = list(range(epoch_inc, 175, epoch_inc))
+    rmsds = [gauss_rmsd[0]]
+    avg_residuals = [compute_avg_residual(g_images, target)]
+    print(len(avg_residuals))
+    residuals = [(g_images[0] - target).squeeze(0)]
+
+    r = 2
+    a = 5
+    epochs = [a * r**i for i in range(6)]
+    # epochs = list(range(epoch_inc, 175, epoch_inc))
     print(epochs)
     for epoch in epochs:
         g_images = g_dataset.get_regions(x, y)
         g_images = torch.stack(g_images)
         target = cls.get_regions(x,y)[0]
-        model.load_state_dict(torch.load(f'./models/{epoch_inc}epochs_{var}/{epoch}e_{var}_model_cdae.pth'))
+        model.load_state_dict(torch.load(f'./models/multiscale_loss_{var}/{epoch}e_{var}_model_cdae.pth'))
+        # model.load_state_dict(torch.load(f'./models/{epoch_inc}epochs_{var}/{epoch}e_{var}_model_cdae.pth'))
         g_outputs = model(g_images)
         g_images, g_outputs, target = detach_tensors([g_images, g_outputs, target])
         mask = land_false(g_images)[0]
@@ -348,16 +378,30 @@ def main():
         g_images = g_images * mask
         g_outputs = g_outputs * mask
         avg_residual = compute_avg_residual(g_outputs, target)
-        residuals.append(avg_residual)
-        print(len(residuals))
-        rmsd = compute_rmsd(avg_residual, hw_size=5, mask=mask)
+        avg_residuals.append(avg_residual)
+        residual = (g_outputs[0] - target)
+        residuals.append(residual[0])
+        # rmsd = compute_rmsd(avg_residual, hw_size=5, mask=mask)
+        rmsd = compute_avg_rmsd(g_outputs, target, hw_size=5, mask=mask)
         rmsds.append(rmsd[0])
     print(np.shape(g_outputs))
-    create_subplot(g_outputs.squeeze(1), [[x, y]] * batch_size, mdt=False, rmse=False, residual=False, titles=[f'{epoch} epochs' for epoch in epochs])#, big_title='RMSD between network output and cls - trained over a different number of epochs')    
-    create_subplot(g_images.squeeze(1), [[x, y]] * batch_size, mdt=False, rmse=False, residual=False, titles=[f'{epoch} epochs' for epoch in epochs])
-    print(len(residuals))
-    create_subplot(rmsds, [[x, y]] * batch_size, mdt=False, rmse=True, titles=[f'{epoch} epochs' for epoch in epochs], big_title='RMSD between network output and CLS18 - trained over a different number of epochs')    
-    create_subplot(residuals, [[x, y]] * batch_size, mdt=False, rmse=False, residual=True, titles=['Unfiltered'] + [f'{epoch} epochs' for epoch in epochs], big_title='Residual difference (Network Output - CLS18) trained over a different number of epochs')
+
+
+    # create_subplot(g_outputs.squeeze(1), [[x, y]] * batch_size, mdt=mdt, rmse=False, residual=False, titles=[f'{epoch} epochs' for epoch in epochs])#, big_title='RMSD between network output and cls - trained over a different number of epochs')    
+    # create_subplot(g_images.squeeze(1), [[x, y]] * batch_size, mdt=mdt, rmse=False, residual=False, titles=[f'{epoch} epochs' for epoch in epochs])
+    # print(len(avg_residuals))
+    create_subplot(rmsds, [[x, y]] * batch_size, mdt=mdt, rmse=True, titles=['Gaussian Filtered (320km HW)'] + [f'{epoch} epochs' for epoch in epochs], big_title=f'RMSD between network output and target - trained over a different number of epochs ({var} trained)')    
+    print(np.shape(residuals))
+    create_subplot(residuals, [[x, y]] * batch_size, mdt=mdt, rmse=False, residual=True, titles=['Unfiltered'] + [f'{epoch} epochs' for epoch in epochs], big_title=f'Residual difference (Output - Target) trained over a different number of epochs ({var} trained)')
+    
+
+
+    fig, ax = plt.subplots(1,4)
+    ax[0].imshow(g_images[0,0])#, vmin=-0.6, vmax=0.6)
+    ax[1].imshow(g_outputs[0,0])#, vmin=-0.6, vmax=0.6)
+    ax[2].imshow(target[0])#, vmin=-0.6, vmax=0.6)
+    ax[3].imshow(residuals[-1])#, vmin=-0.6, vmax=0.6)
+    plt.show()
 
 
     avg_rmses = []
@@ -533,7 +577,7 @@ def main():
 
     # -----------------------------------------
     # Load CMIP images with added synthetic noise
-    images, targets, paths = load_batch(dataset, batch_size)
+    images, targets, paths = load_batch(g_dataset, batch_size)
     outputs = model(images)
     images, outputs, targets = detach_tensors([images, outputs, targets])
     mask = land_false(targets)
